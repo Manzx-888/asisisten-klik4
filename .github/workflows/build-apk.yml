@@ -20,11 +20,10 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
-          cache: gradle
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
@@ -32,6 +31,7 @@ jobs:
       - name: Install Android SDK packages
         run: |
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
+
           sdkmanager \
             "platform-tools" \
             "platforms;android-35" \
@@ -42,18 +42,45 @@ jobs:
         with:
           gradle-version: '8.11.1'
 
-      - name: Check Android project
+      - name: Check project
         run: |
-          echo "=== PROJECT ==="
+          echo "================================"
+          echo "CHECK PROJECT"
+          echo "================================"
+
           pwd
-          find . -maxdepth 4 -type f | sort
-          echo "================"
+
+          echo ""
+          echo "FILES:"
+          find . -maxdepth 5 -type f | sort
+
+          echo ""
+          echo "CHECK REQUIRED FILES:"
 
           test -f settings.gradle
+          echo "OK settings.gradle"
+
           test -f build.gradle
+          echo "OK build.gradle"
+
+          test -f gradle.properties
+          echo "OK gradle.properties"
+
           test -f app/build.gradle
+          echo "OK app/build.gradle"
+
           test -f app/src/main/AndroidManifest.xml
+          echo "OK AndroidManifest.xml"
+
           test -f app/src/main/res/xml/accessibility_service_config.xml
+          echo "OK accessibility_service_config.xml"
+
+          echo ""
+          echo "PROJECT CHECK PASSED"
+
+      - name: Clean previous build
+        run: |
+          gradle clean --no-daemon
 
       - name: Build Debug APK
         run: |
@@ -63,11 +90,28 @@ jobs:
 
       - name: Check APK
         run: |
-          echo "=== APK ==="
-          find app/build/outputs/apk -type f -name "*.apk" -print
-          echo "==========="
+          echo "================================"
+          echo "APK RESULT"
+          echo "================================"
 
-          test -n "$(find app/build/outputs/apk -type f -name '*.apk' -print -quit)"
+          find app/build/outputs/apk/debug \
+            -type f \
+            -name "*.apk" \
+            -print
+
+          APK=$(find app/build/outputs/apk/debug \
+            -type f \
+            -name "*.apk" \
+            -print -quit)
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: APK tidak ditemukan!"
+            exit 1
+          fi
+
+          echo ""
+          echo "APK BERHASIL:"
+          echo "$APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
