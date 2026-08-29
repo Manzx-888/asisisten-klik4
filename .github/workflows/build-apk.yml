@@ -15,24 +15,25 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # ========================================
+
+      # =========================================
       # CHECKOUT
-      # ========================================
+      # =========================================
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ========================================
+      # =========================================
       # JAVA 17
-      # ========================================
+      # =========================================
       - name: Setup Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
-      # ========================================
+      # =========================================
       # ANDROID SDK
-      # ========================================
+      # =========================================
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
@@ -45,34 +46,34 @@ jobs:
             "platforms;android-35" \
             "build-tools;35.0.0"
 
-      # ========================================
-      # FIND ZIP
-      # ========================================
+      # =========================================
+      # CARI ZIP
+      # =========================================
       - name: Find APK source ZIP
         shell: bash
         run: |
           set -e
 
           echo "========================================"
-          echo "SEARCHING ZIP"
+          echo "MENCARI ZIP"
           echo "========================================"
 
           ZIP_FILE=$(find . -maxdepth 1 -type f -iname "*.zip" | head -n 1)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: ZIP APK tidak ditemukan!"
+            echo "ERROR: ZIP tidak ditemukan!"
             exit 1
           fi
 
-          echo "ZIP ditemukan:"
+          echo "ZIP:"
           echo "$ZIP_FILE"
 
           echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
 
-      # ========================================
+      # =========================================
       # EXTRACT ZIP
-      # ========================================
-      - name: Extract APK source
+      # =========================================
+      - name: Extract ZIP
         shell: bash
         run: |
           set -e
@@ -80,62 +81,91 @@ jobs:
           rm -rf extracted
           mkdir -p extracted
 
-          echo "Extracting:"
-          echo "$ZIP_FILE"
-
           unzip -q "$ZIP_FILE" -d extracted
 
-          echo ""
-          echo "HASIL EXTRACT:"
-          find extracted -maxdepth 4 -type f | sort | head -300
+          echo "========================================"
+          echo "ISI ZIP"
+          echo "========================================"
 
-      # ========================================
-      # LOCATE ANDROID PROJECT
-      # ========================================
+          find extracted -maxdepth 5 -type f | sort
+
+      # =========================================
+      # CARI PROJECT ANDROID
+      # =========================================
       - name: Locate Android project
         shell: bash
         run: |
           set -e
 
-          echo "========================================"
-          echo "LOCATING ANDROID PROJECT"
-          echo "========================================"
-
           PROJECT_DIR=""
 
-          # Cari settings.gradle / settings.gradle.kts
           while IFS= read -r SETTINGS; do
+
             DIR=$(dirname "$SETTINGS")
 
             if [ -f "$DIR/build.gradle" ] || \
                [ -f "$DIR/build.gradle.kts" ]; then
+
               PROJECT_DIR="$DIR"
               break
+
             fi
-          done < <(find extracted -type f \( \
-            -name "settings.gradle" -o \
-            -name "settings.gradle.kts" \
-          \) | sort)
+
+          done < <(
+            find extracted -type f \( \
+              -name "settings.gradle" -o \
+              -name "settings.gradle.kts" \
+            \) | sort
+          )
 
           if [ -z "$PROJECT_DIR" ]; then
-            echo "ERROR: Android project tidak ditemukan!"
-            echo ""
-            echo "Isi ZIP:"
-            find extracted -maxdepth 5 -type f | sort
+            echo "ERROR: Project Android tidak ditemukan!"
             exit 1
           fi
 
-          # Hilangkan ./ kalau ada
           PROJECT_DIR="${PROJECT_DIR#./}"
 
-          echo "ANDROID PROJECT:"
+          echo "PROJECT:"
           echo "$PROJECT_DIR"
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-      # ========================================
-      # SHOW PROJECT
-      # ========================================
+      # =========================================
+      # FIX GRADLE WRAPPER
+      # =========================================
+      - name: Fix Gradle Wrapper
+        shell: bash
+        run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
+          echo "========================================"
+          echo "FIX GRADLE WRAPPER"
+          echo "========================================"
+
+          if [ ! -f "gradle/wrapper/gradle-wrapper.properties" ]; then
+            echo "ERROR: gradle-wrapper.properties tidak ditemukan!"
+            exit 1
+          fi
+
+          echo "Wrapper sebelum:"
+          cat gradle/wrapper/gradle-wrapper.properties
+
+          # Paksa wrapper ke Gradle 8.11.1
+          sed -i \
+            's#distributionUrl=.*#distributionUrl=https\\://services.gradle.org/distributions/gradle-8.11.1-bin.zip#' \
+            gradle/wrapper/gradle-wrapper.properties
+
+          echo ""
+          echo "Wrapper sesudah:"
+          cat gradle/wrapper/gradle-wrapper.properties
+
+          chmod +x gradlew
+
+      # =========================================
+      # CHECK PROJECT
+      # =========================================
       - name: Check Android project
         shell: bash
         run: |
@@ -144,9 +174,10 @@ jobs:
           cd "$PROJECT_DIR"
 
           echo "========================================"
-          echo "ANDROID PROJECT"
+          echo "CHECK PROJECT"
           echo "========================================"
 
+          echo "PATH:"
           pwd
 
           echo ""
@@ -154,35 +185,12 @@ jobs:
           find . -maxdepth 3 -type f | sort
 
           echo ""
-          echo "========================================"
-          echo "GRADLE FILES"
-          echo "========================================"
+          echo "GRADLE VERSION:"
+          ./gradlew --version
 
-          ls -la
-
-          if [ ! -f "settings.gradle" ] && \
-             [ ! -f "settings.gradle.kts" ]; then
-            echo "ERROR: settings.gradle tidak ditemukan"
-            exit 1
-          fi
-
-          if [ ! -f "build.gradle" ] && \
-             [ ! -f "build.gradle.kts" ]; then
-            echo "ERROR: root build.gradle tidak ditemukan"
-            exit 1
-          fi
-
-      # ========================================
-      # INSTALL GRADLE 8.9
-      # ========================================
-      - name: Setup Gradle 8.9
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.9'
-
-      # ========================================
+      # =========================================
       # BUILD APK
-      # ========================================
+      # =========================================
       - name: Build Debug APK
         shell: bash
         run: |
@@ -194,45 +202,44 @@ jobs:
           echo "BUILD APK"
           echo "========================================"
 
-          gradle --version
-
-          gradle assembleDebug \
+          ./gradlew \
+            assembleDebug \
             --no-daemon \
-            --stacktrace
+            --stacktrace \
+            --warning-mode all
 
-      # ========================================
-      # FIND APK
-      # ========================================
+      # =========================================
+      # CARI APK
+      # =========================================
       - name: Find APK
         shell: bash
         run: |
           set -e
 
           echo "========================================"
-          echo "SEARCH APK"
+          echo "MENCARI APK"
           echo "========================================"
 
-          APK=$(find "$PROJECT_DIR" -type f \
-            -path "*/build/outputs/apk/*.apk" | head -n 1)
+          APK=$(find "$PROJECT_DIR" \
+            -type f \
+            -path "*/build/outputs/apk/*.apk" \
+            | head -n 1)
 
           if [ -z "$APK" ]; then
             echo "ERROR: APK tidak ditemukan!"
-            echo ""
-            find "$PROJECT_DIR" -type f -name "*.apk"
             exit 1
           fi
 
           echo "APK ditemukan:"
           echo "$APK"
 
-          mkdir -p "$GITHUB_WORKSPACE/output"
+          mkdir -p output
 
-          cp "$APK" \
-            "$GITHUB_WORKSPACE/output/AsistenKlik.apk"
+          cp "$APK" output/AsistenKlik.apk
 
-      # ========================================
+      # =========================================
       # UPLOAD APK
-      # ========================================
+      # =========================================
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
@@ -240,16 +247,15 @@ jobs:
           path: output/AsistenKlik.apk
           if-no-files-found: error
 
-      # ========================================
-      # BUILD INFO
-      # ========================================
-      - name: Build success
+      # =========================================
+      # SUCCESS
+      # =========================================
+      - name: Build Success
         run: |
           echo ""
           echo "========================================"
           echo "BUILD BERHASIL"
           echo "========================================"
           echo ""
-          echo "APK:"
+
           ls -lh output/AsistenKlik.apk
-          
