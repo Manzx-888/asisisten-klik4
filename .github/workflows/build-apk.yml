@@ -3,10 +3,8 @@ name: Build APK
 on:
   workflow_dispatch:
   push:
-    paths:
-      - "*.zip"
-      - "**/*.zip"
-      - ".github/workflows/build-apk.yml"
+    branches:
+      - main
 
 permissions:
   contents: read
@@ -17,150 +15,152 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Find ZIP
-        id: zip
-        shell: bash
-        run: |
-          set -e
-
-          ZIP_FILE=$(find . -type f -iname "*.zip" \
-            -not -path "./.git/*" \
-            | head -n 1)
-
-          if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: ZIP tidak ditemukan."
-            exit 1
-          fi
-
-          echo "ZIP: $ZIP_FILE"
-          echo "zip=$ZIP_FILE" >> "$GITHUB_OUTPUT"
-
-      - name: Extract ZIP
-        shell: bash
-        run: |
-          set -e
-
-          rm -rf extracted
-          mkdir -p extracted
-
-          unzip -q "${{ steps.zip.outputs.zip }}" -d extracted
-
-          echo "=== HASIL EXTRACT ==="
-          find extracted -maxdepth 4 -type f | sort
-
-      - name: Detect Android Project
-        id: project
-        shell: bash
-        run: |
-          set -e
-
-          PROJECT=""
-
-          # Cari settings.gradle
-          SETTINGS=$(find extracted -type f \
-            \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
-            | head -n 1 || true)
-
-          if [ -n "$SETTINGS" ]; then
-            PROJECT=$(dirname "$SETTINGS")
-          fi
-
-          if [ -z "$PROJECT" ]; then
-            echo "ERROR: settings.gradle tidak ditemukan."
-            find extracted -maxdepth 5 -type f | sort
-            exit 1
-          fi
-
-          echo "Project ditemukan:"
-          echo "$PROJECT"
-
-          echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
-
-      - name: Show Project
-        shell: bash
-        run: |
-          cd "${{ steps.project.outputs.project }}"
-
-          echo "=== PROJECT ==="
-          pwd
-
-          echo
-          echo "=== FILES ==="
-          find . -maxdepth 4 -type f | sort
-
-          echo
-          echo "=== BUILD.GRADLE ==="
-          cat build.gradle 2>/dev/null || true
-
-          echo
-          echo "=== SETTINGS.GRADLE ==="
-          cat settings.gradle 2>/dev/null || true
-
-      - name: Set up JDK 17
+      - name: Setup JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: '17'
 
-      - name: Set up Android SDK
+      - name: Setup Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK
-        shell: bash
+      - name: Install Android SDK packages
         run: |
-          set -e
-
-          yes | sdkmanager --licenses >/dev/null || true
+          yes | sdkmanager --licenses || true
 
           sdkmanager \
             "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0"
 
-      - name: Install Gradle
+      - name: Find ZIP
+        id: find_zip
         shell: bash
         run: |
-          set -e
+          ZIP=$(find . -maxdepth 2 -type f -iname "*.zip" | head -n 1)
 
-          GRADLE_VERSION="8.7"
+          if [ -z "$ZIP" ]; then
+            echo "ERROR: ZIP APK tidak ditemukan."
+            exit 1
+          fi
 
-          wget -q \
-            "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip" \
-            -O /tmp/gradle.zip
+          echo "ZIP ditemukan: $ZIP"
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
 
-          unzip -q /tmp/gradle.zip -d /opt
+      - name: Extract ZIP
+        shell: bash
+        run: |
+          rm -rf extracted
+          mkdir -p extracted
 
-          echo "/opt/gradle-${GRADLE_VERSION}/bin" >> "$GITHUB_PATH"
+          unzip -o "${{ steps.find_zip.outputs.zip }}" -d extracted
 
+          echo "=== HASIL EXTRACT ==="
+          find extracted -maxdepth 3 -type f | sort
+
+      - name: Find Android Project
+        id: project
+        shell: bash
+        run: |
+          PROJECT=$(find "$GITHUB_WORKSPACE/extracted" \
+            -name settings.gradle \
+            -o -name settings.gradle.kts \
+            | head -n 1)
+
+          if [ -z "$PROJECT" ]; then
+            echo "ERROR: settings.gradle tidak ditemukan."
+            echo "Isi extracted:"
+            find "$GITHUB_WORKSPACE/extracted" -maxdepth 5 -type f | sort
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$PROJECT")
+
+          echo "Android project ditemukan:"
+          echo "$PROJECT_DIR"
+
+          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Show Project
+        shell: bash
+        run: |
+          PROJECT="${{ steps.project.outputs.project_dir }}"
+
+          echo "=== PROJECT ==="
+          ls -la "$PROJECT"
+
+          echo
+          echo "=== FILES ==="
+          find "$PROJECT" -maxdepth 3 -type f | sort
+
+      - name: Check Gradle Version
+        shell: bash
+        run: |
           gradle --version
 
-      - name: Build APK
+      - name: Fix Gradle Wrapper
         shell: bash
         run: |
-          set -e
+          PROJECT="${{ steps.project.outputs.project_dir }}"
 
-          cd "${{ steps.project.outputs.project }}"
+          cd "$PROJECT"
 
-          echo "=== BUILD APK ==="
+          echo "=== BEFORE ==="
 
-          gradle assembleDebug --stacktrace
+          if [ -f gradle/wrapper/gradle-wrapper.properties ]; then
+            cat gradle/wrapper/gradle-wrapper.properties
+          else
+            echo "Wrapper belum ada."
+          fi
+
+          echo
+          echo "=== GENERATE GRADLE WRAPPER 8.9 ==="
+
+          gradle wrapper --gradle-version 8.9 --distribution-type bin
+
+          chmod +x gradlew
+
+          echo
+          echo "=== AFTER ==="
+          cat gradle/wrapper/gradle-wrapper.properties
+
+      - name: Build Debug APK
+        shell: bash
+        run: |
+          PROJECT="${{ steps.project.outputs.project_dir }}"
+
+          cd "$PROJECT"
+
+          chmod +x gradlew
+
+          ./gradlew clean assembleDebug --stacktrace
 
       - name: Find APK
         id: apk
         shell: bash
         run: |
-          set -e
+          PROJECT="${{ steps.project.outputs.project_dir }}"
 
-          APK=$(find "${{ steps.project.outputs.project }}" \
+          APK=$(find "$PROJECT" \
             -type f \
-            -name "*.apk" \
-            | head -n 1 || true)
+            -path "*/build/outputs/apk/*/*.apk" \
+            | head -n 1)
 
           if [ -z "$APK" ]; then
             echo "ERROR: APK tidak ditemukan."
+
+            echo
+            echo "=== SEMUA APK ==="
+            find "$PROJECT" -type f -name "*.apk" || true
+
             exit 1
           fi
 
@@ -172,6 +172,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Asisten-Klik-APK
+          name: AsistenKlik-debug
           path: ${{ steps.apk.outputs.apk }}
           if-no-files-found: error
