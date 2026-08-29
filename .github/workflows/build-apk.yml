@@ -2,9 +2,6 @@ name: Build Asisten Klik APK
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
 
 permissions:
   contents: read
@@ -15,65 +12,46 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-
-      # =========================================
+      # ==========================================
       # CHECKOUT
-      # =========================================
-      - name: Checkout
+      # ==========================================
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      # =========================================
-      # JAVA 17
-      # =========================================
-      - name: Setup Java 17
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      # =========================================
-      # ANDROID SDK
-      # =========================================
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK packages
-        run: |
-          yes | sdkmanager --licenses || true
-
-          sdkmanager \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
-
-      # =========================================
-      # CARI ZIP
-      # =========================================
-      - name: Find APK source ZIP
+      # ==========================================
+      # FIND ZIP
+      # ==========================================
+      - name: Find APK ZIP
+        id: find_zip
         shell: bash
         run: |
           set -e
 
-          echo "========================================"
-          echo "MENCARI ZIP"
-          echo "========================================"
+          echo "======================================"
+          echo "MENCARI ZIP APK"
+          echo "======================================"
 
-          ZIP_FILE=$(find . -maxdepth 1 -type f -iname "*.zip" | head -n 1)
+          ZIP=$(find . -maxdepth 1 -type f \
+            \( -iname "*.zip" \) \
+            -print -quit)
 
-          if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: ZIP tidak ditemukan!"
+          if [ -z "$ZIP" ]; then
+            echo "ERROR: ZIP APK tidak ditemukan!"
+            echo ""
+            echo "File yang tersedia:"
+            find . -maxdepth 2 -type f | sort
             exit 1
           fi
 
-          echo "ZIP:"
-          echo "$ZIP_FILE"
+          echo "ZIP ditemukan:"
+          echo "$ZIP"
 
-          echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
 
-      # =========================================
+      # ==========================================
       # EXTRACT ZIP
-      # =========================================
-      - name: Extract ZIP
+      # ==========================================
+      - name: Extract APK project
         shell: bash
         run: |
           set -e
@@ -81,181 +59,246 @@ jobs:
           rm -rf extracted
           mkdir -p extracted
 
-          unzip -q "$ZIP_FILE" -d extracted
+          unzip -q "${{ steps.find_zip.outputs.zip }}" -d extracted
 
-          echo "========================================"
+          echo "======================================"
           echo "ISI ZIP"
-          echo "========================================"
+          echo "======================================"
 
-          find extracted -maxdepth 5 -type f | sort
+          find extracted -maxdepth 4 -type f | sort
 
-      # =========================================
-      # CARI PROJECT ANDROID
-      # =========================================
+      # ==========================================
+      # FIND ANDROID PROJECT
+      # ==========================================
       - name: Locate Android project
+        id: project
         shell: bash
         run: |
           set -e
 
-          PROJECT_DIR=""
+          echo "======================================"
+          echo "MENCARI PROJECT ANDROID"
+          echo "======================================"
 
+          PROJECT=""
+
+          # Cari settings.gradle / settings.gradle.kts
           while IFS= read -r SETTINGS; do
-
             DIR=$(dirname "$SETTINGS")
 
             if [ -f "$DIR/build.gradle" ] || \
                [ -f "$DIR/build.gradle.kts" ]; then
-
-              PROJECT_DIR="$DIR"
+              PROJECT="$DIR"
               break
-
             fi
-
           done < <(
-            find extracted -type f \( \
-              -name "settings.gradle" -o \
-              -name "settings.gradle.kts" \
-            \) | sort
+            find extracted \
+              -type f \
+              \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
+              -not -path "*/.gradle/*" \
+              | sort
           )
 
-          if [ -z "$PROJECT_DIR" ]; then
+          # Fallback: cari build.gradle + app
+          if [ -z "$PROJECT" ]; then
+            while IFS= read -r BUILD; do
+              DIR=$(dirname "$BUILD")
+
+              if [ -d "$DIR/app" ] && \
+                 [ -f "$DIR/settings.gradle" -o -f "$DIR/settings.gradle.kts" ]; then
+                PROJECT="$DIR"
+                break
+              fi
+            done < <(
+              find extracted \
+                -type f \
+                \( -name "build.gradle" -o -name "build.gradle.kts" \) \
+                -not -path "*/.gradle/*" \
+                | sort
+            )
+          fi
+
+          if [ -z "$PROJECT" ]; then
             echo "ERROR: Project Android tidak ditemukan!"
+            echo ""
+            echo "Struktur extracted:"
+            find extracted -maxdepth 5 -type f | sort
             exit 1
           fi
 
-          PROJECT_DIR="${PROJECT_DIR#./}"
+          echo "PROJECT=$PROJECT"
 
-          echo "PROJECT:"
-          echo "$PROJECT_DIR"
+          echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
 
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+      # ==========================================
+      # JAVA 17
+      # ==========================================
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
 
-      # =========================================
-      # FIX GRADLE WRAPPER
-      # =========================================
-      - name: Fix Gradle Wrapper
+      # ==========================================
+      # ANDROID SDK
+      # ==========================================
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      # ==========================================
+      # ANDROID SDK PACKAGES
+      # ==========================================
+      - name: Install Android SDK packages
         shell: bash
         run: |
           set -e
 
-          cd "$PROJECT_DIR"
+          echo "======================================"
+          echo "INSTALL ANDROID SDK"
+          echo "======================================"
 
-          echo "========================================"
-          echo "FIX GRADLE WRAPPER"
-          echo "========================================"
+          sdkmanager --licenses > /dev/null || true
 
-          if [ ! -f "gradle/wrapper/gradle-wrapper.properties" ]; then
-            echo "ERROR: gradle-wrapper.properties tidak ditemukan!"
-            exit 1
-          fi
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
 
-          echo "Wrapper sebelum:"
-          cat gradle/wrapper/gradle-wrapper.properties
+      # ==========================================
+      # GRADLE 8.11.1
+      # ==========================================
+      - name: Setup Gradle 8.11.1
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '8.11.1'
 
-          # Paksa wrapper ke Gradle 8.11.1
-          sed -i \
-            's#distributionUrl=.*#distributionUrl=https\\://services.gradle.org/distributions/gradle-8.11.1-bin.zip#' \
-            gradle/wrapper/gradle-wrapper.properties
-
-          echo ""
-          echo "Wrapper sesudah:"
-          cat gradle/wrapper/gradle-wrapper.properties
-
-          chmod +x gradlew
-
-      # =========================================
+      # ==========================================
       # CHECK PROJECT
-      # =========================================
+      # ==========================================
       - name: Check Android project
+        working-directory: ${{ steps.project.outputs.project }}
         shell: bash
         run: |
           set -e
 
-          cd "$PROJECT_DIR"
-
-          echo "========================================"
+          echo "======================================"
           echo "CHECK PROJECT"
-          echo "========================================"
+          echo "======================================"
 
-          echo "PATH:"
+          echo "Working directory:"
           pwd
 
           echo ""
-          echo "FILES:"
+          echo "Project files:"
           find . -maxdepth 3 -type f | sort
 
           echo ""
-          echo "GRADLE VERSION:"
-          ./gradlew --version
+          echo "Gradle:"
+          gradle --version
 
-      # =========================================
-      # BUILD APK
-      # =========================================
+          echo ""
+          echo "Settings:"
+          if [ -f settings.gradle ]; then
+            cat settings.gradle
+          elif [ -f settings.gradle.kts ]; then
+            cat settings.gradle.kts
+          fi
+
+      # ==========================================
+      # BUILD DEBUG APK
+      # ==========================================
       - name: Build Debug APK
+        working-directory: ${{ steps.project.outputs.project }}
         shell: bash
         run: |
           set -e
 
-          cd "$PROJECT_DIR"
+          echo "======================================"
+          echo "BUILD DEBUG APK"
+          echo "======================================"
 
-          echo "========================================"
-          echo "BUILD APK"
-          echo "========================================"
-
-          ./gradlew \
-            assembleDebug \
+          gradle \
             --no-daemon \
             --stacktrace \
-            --warning-mode all
+            --warning-mode all \
+            assembleDebug
 
-      # =========================================
-      # CARI APK
-      # =========================================
+      # ==========================================
+      # FIND APK
+      # ==========================================
       - name: Find APK
+        id: apk
+        working-directory: ${{ steps.project.outputs.project }}
         shell: bash
         run: |
           set -e
 
-          echo "========================================"
+          echo "======================================"
           echo "MENCARI APK"
-          echo "========================================"
+          echo "======================================"
 
-          APK=$(find "$PROJECT_DIR" \
+          APK=$(find . \
             -type f \
-            -path "*/build/outputs/apk/*.apk" \
+            -path "*/build/outputs/apk/debug/*.apk" \
             | head -n 1)
 
           if [ -z "$APK" ]; then
             echo "ERROR: APK tidak ditemukan!"
+
+            echo ""
+            echo "Semua file APK:"
+            find . -type f -name "*.apk" || true
+
             exit 1
           fi
 
           echo "APK ditemukan:"
           echo "$APK"
 
+          echo "apk=$APK" >> "$GITHUB_OUTPUT"
+
+      # ==========================================
+      # COPY APK
+      # ==========================================
+      - name: Prepare APK
+        shell: bash
+        run: |
+          set -e
+
           mkdir -p output
 
-          cp "$APK" output/AsistenKlik.apk
+          cp "${{ steps.project.outputs.project }}/${{ steps.apk.outputs.apk }}" \
+             "output/Asisten-Klik-debug.apk"
 
-      # =========================================
+          echo "======================================"
+          echo "APK SIAP"
+          echo "======================================"
+
+          ls -lh output/
+
+      # ==========================================
       # UPLOAD APK
-      # =========================================
+      # ==========================================
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: AsistenKlik-APK
-          path: output/AsistenKlik.apk
+          name: Asisten-Klik-APK
+          path: output/Asisten-Klik-debug.apk
           if-no-files-found: error
+          retention-days: 30
 
-      # =========================================
-      # SUCCESS
-      # =========================================
+      # ==========================================
+      # BUILD SUCCESS
+      # ==========================================
       - name: Build Success
+        shell: bash
         run: |
           echo ""
-          echo "========================================"
-          echo "BUILD BERHASIL"
-          echo "========================================"
+          echo "======================================"
+          echo "       BUILD BERHASIL"
+          echo "======================================"
           echo ""
-
-          ls -lh output/AsistenKlik.apk
+          echo "APK:"
+          ls -lh output/Asisten-Klik-debug.apk
+          echo ""
+          echo "Download APK melalui Artifacts."
